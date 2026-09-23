@@ -8,6 +8,16 @@ MODEL_PATH="${MODEL_PATH:-/models/model.gguf}"
 N_GPU_LAYERS="${N_GPU_LAYERS:-999}"
 CTX_SIZE="${CTX_SIZE:-4096}"
 PARALLEL="${PARALLEL:-1}"
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/app/llama-server}"
+
+if [ ! -x "$LLAMA_SERVER_BIN" ]; then
+  if command -v llama-server >/dev/null 2>&1; then
+    LLAMA_SERVER_BIN="$(command -v llama-server)"
+  else
+    echo "llama-server binary not found. Set LLAMA_SERVER_BIN." >&2
+    exit 69
+  fi
+fi
 
 if [ ! -f "$MODEL_PATH" ]; then
   echo "Model file not found: $MODEL_PATH" >&2
@@ -15,7 +25,7 @@ if [ ! -f "$MODEL_PATH" ]; then
   exit 64
 fi
 
-set -- llama-server \
+set -- "$LLAMA_SERVER_BIN" \
   --host "$HOST" \
   --port "$PORT" \
   -m "$MODEL_PATH" \
