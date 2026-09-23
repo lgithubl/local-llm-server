@@ -1,0 +1,12 @@
+services:
+  local-llm-server:
+    image: ghcr.io/lgithubl/local-llm-server:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models
+    environment:
+      MODEL_TYPE: sakura
+      MODEL_PATH: /models/sakura-7b-qwen2.5-v1.0-iq4xs.gguf
+      CTX_SIZE: "4096"
+      N_GPU_LAYERS: "999"
