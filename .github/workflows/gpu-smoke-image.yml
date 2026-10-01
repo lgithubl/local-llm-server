@@ -1,0 +1,141 @@
+name: GPU Smoke Test Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Docker image to test on a real NVIDIA GPU runner
+        required: true
+        default: ghcr.io/lgithubl/local-llm-server:m40
+      expected_compute_capability:
+        description: Expected CUDA compute capability. Tesla M40 is 5.2.
+        required: false
+        default: "5.2"
+      model_url:
+        description: Small GGUF model URL for an end-to-end llama.cpp request
+        required: false
+        default: https://huggingface.co/Mozilla/llama-test-model/resolve/main/tiny-llama.gguf
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  gpu-smoke:
+    name: Run image on M40 GPU
+    runs-on: [self-hosted, linux, x64, gpu, m40]
+    timeout-minutes: 30
+
+    steps:
+      - name: Login to GitHub Container Registry
+        if: ${{ startsWith(inputs.image, 'ghcr.io/') }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check host GPU
+        shell: bash
+        run: |
+          set -euxo pipefail
+          command -v nvidia-smi
+          nvidia-smi
+          docker info
+
+      - name: Pull image
+        shell: bash
+        run: docker pull "${{ inputs.image }}"
+
+      - name: Check runtime dependencies and NVIDIA mount
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run --rm --gpus all --entrypoint /bin/sh "${{ inputs.image }}" -c '
+            ldd /app/llama-server | tee /tmp/ldd.txt
+            ! grep "not found" /tmp/ldd.txt
+            test -e /dev/nvidiactl
+            /app/llama-server --help >/tmp/llama-help.txt
+            head -80 /tmp/llama-help.txt
+          '
+
+      - name: Download tiny GGUF model
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -L --retry 5 --retry-delay 5 \
+            "${{ inputs.model_url }}" \
+            -o "$RUNNER_TEMP/models/model.gguf"
+          ls -lh "$RUNNER_TEMP/models/model.gguf"
+
+      - name: Start llama-server with GPU offload
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker rm -f local-llm-gpu-smoke >/dev/null 2>&1 || true
+          docker run -d --name local-llm-gpu-smoke \
+            --gpus all \
+            -p 127.0.0.1::8080 \
+            -v "$RUNNER_TEMP/models:/models:ro" \
+            -e MODEL_TYPE=text \
+            -e MODEL_PATH=/models/model.gguf \
+            -e N_GPU_LAYERS=999 \
+            -e CTX_SIZE=512 \
+            -e LLAMA_SERVER_ARGS="--alias gpu-smoke" \
+            "${{ inputs.image }}"
+          docker port local-llm-gpu-smoke 8080/tcp | sed 's/.*://' > "$RUNNER_TEMP/local-llm-port"
+
+      - name: Wait for server
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PORT="$(cat "$RUNNER_TEMP/local-llm-port")"
+          for i in $(seq 1 90); do
+            if curl -fsS "http://127.0.0.1:${PORT}/health" >/tmp/local-llm-health.txt; then
+              exit 0
+            fi
+            docker logs --tail 120 local-llm-gpu-smoke || true
+            sleep 2
+          done
+          docker logs local-llm-gpu-smoke || true
+          exit 1
+
+      - name: Assert CUDA path and run inference
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PORT="$(cat "$RUNNER_TEMP/local-llm-port")"
+          docker logs local-llm-gpu-smoke >/tmp/local-llm-gpu-smoke.log 2>&1 || true
+          grep -Eiq 'cuda|gpu|offload' /tmp/local-llm-gpu-smoke.log
+          curl -fsS "http://127.0.0.1:${PORT}/v1/chat/completions" \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"gpu-smoke","messages":[{"role":"user","content":"Say OK."}],"stream":false,"max_tokens":8}' \
+            | tee /tmp/local-llm-response.json
+          test -s /tmp/local-llm-response.json
+          nvidia-smi --query-gpu=compute_cap --format=csv,noheader \
+            | tee /tmp/local-llm-compute-cap.txt
+          grep -qx "${{ inputs.expected_compute_capability }}" /tmp/local-llm-compute-cap.txt
+
+      - name: Collect logs
+        if: always()
+        shell: bash
+        run: |
+          docker logs local-llm-gpu-smoke >/tmp/local-llm-container.log 2>&1 || true
+          docker ps -a >/tmp/local-llm-docker-ps.txt || true
+          docker rm -f local-llm-gpu-smoke >/dev/null 2>&1 || true
+
+      - name: Upload GPU smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: local-llm-gpu-smoke
+          path: |
+            /tmp/local-llm-health.txt
+            /tmp/local-llm-response.json
+            /tmp/local-llm-gpu-smoke.log
+            /tmp/local-llm-container.log
+            /tmp/local-llm-docker-ps.txt
+            /tmp/local-llm-compute-cap.txt
+          if-no-files-found: warn
+          retention-days: 7
