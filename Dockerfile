@@ -37,6 +37,13 @@ RUN git clone https://github.com/ggml-org/llama.cpp.git \
 
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
 
+ARG CUDA_VERSION
+ARG CUDA_ARCHITECTURES
+
+LABEL ai.lgithubl.cuda.version="${CUDA_VERSION}" \
+      ai.lgithubl.cuda.architectures="${CUDA_ARCHITECTURES}" \
+      ai.lgithubl.m40.expected_compute_capability="5.2"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \

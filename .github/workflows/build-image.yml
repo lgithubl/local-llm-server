@@ -85,9 +85,30 @@ jobs:
       - name: Smoke test runtime dependencies
         shell: bash
         run: |
+          set -euxo pipefail
           docker pull "${{ steps.image.outputs.image }}"
-          docker run --rm --entrypoint /bin/sh "${{ steps.image.outputs.image }}" -c \
-            "ldd /app/llama-server | tee /tmp/ldd.txt; ! grep 'not found' /tmp/ldd.txt | grep -v 'libcuda.so.1'"
+          docker run --rm --entrypoint /bin/sh "${{ steps.image.outputs.image }}" -c '
+            ldd /app/llama-server | tee /tmp/ldd.txt
+            awk "/not found/ && \$1 != \"libcuda.so.1\" { found=1; print } END { exit found ? 1 : 0 }" /tmp/ldd.txt
+          '
+
+      - name: Validate M40 image contract without GPU
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker image inspect "${{ steps.image.outputs.image }}" \
+            --format '{{ index .Config.Labels "ai.lgithubl.cuda.architectures" }}' \
+            | grep -qx "${{ inputs.cuda_architectures }}"
+          docker image inspect "${{ steps.image.outputs.image }}" \
+            --format '{{ index .Config.Labels "ai.lgithubl.m40.expected_compute_capability" }}' \
+            | grep -qx "5.2"
+          docker run --rm --entrypoint /bin/sh "${{ steps.image.outputs.image }}" -c '
+            test "$N_GPU_LAYERS" = "999"
+            test "$LLAMA_SERVER_BIN" = "/app/llama-server"
+            test -x "$LLAMA_SERVER_BIN"
+            test -f /usr/lib/x86_64-linux-gnu/libgomp.so.1
+            test ! -e /usr/lib/x86_64-linux-gnu/libcuda.so.1
+          '
 
       - name: Export image tarball
         if: inputs.export_artifact == 'true'
