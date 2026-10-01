@@ -4,6 +4,14 @@ Reusable `llama-server` Docker image for local OpenAI-compatible LLM endpoints.
 
 The image does not include models. Mount GGUF files into `/models` and choose a mode with environment variables.
 
+The default image build compiles `llama.cpp` with CUDA architecture `52`, which matches NVIDIA Tesla M40/Maxwell GPUs. If you build for newer GPUs, override the build arg:
+
+```bash
+docker build \
+  --build-arg CUDA_ARCHITECTURES=75 \
+  -t local-llm-server:cuda75 .
+```
+
 ## Sakura
 
 ```bash
@@ -36,3 +44,49 @@ docker run --rm --gpus all \
 ```
 
 Sakura is text-only. Qwen-VL requires a matching language-model GGUF plus `mmproj` GGUF.
+
+## k3s with Tesla M40
+
+On the node, `nvidia-smi` must show the M40 before Kubernetes can use it. Install the NVIDIA container runtime and device plugin so the node advertises `nvidia.com/gpu`.
+
+Example pod shape:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: local-llm-server
+spec:
+  containers:
+    - name: server
+      image: ghcr.io/lgithubl/local-llm-server:m40
+      ports:
+        - containerPort: 8080
+      env:
+        - name: MODEL_TYPE
+          value: sakura
+        - name: MODEL_PATH
+          value: /models/model.gguf
+        - name: N_GPU_LAYERS
+          value: "999"
+      volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+  volumes:
+    - name: models
+      hostPath:
+        path: /opt/models
+        type: Directory
+```
+
+If it still runs on CPU, check that the node has `nvidia.com/gpu` capacity and that the pod has the GPU limit:
+
+```bash
+kubectl describe node | grep -A5 nvidia.com/gpu
+kubectl describe pod local-llm-server | grep -A8 Limits
+kubectl logs local-llm-server
+```

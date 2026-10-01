@@ -6,7 +6,15 @@ on:
       tag:
         description: Image tag
         required: false
-        default: latest
+        default: m40
+      cuda_architectures:
+        description: CUDA architectures to compile for. Tesla M40 uses 52.
+        required: false
+        default: "52"
+      llama_cpp_ref:
+        description: llama.cpp git ref to build
+        required: false
+        default: master
       export_artifact:
         description: Export image tar.gz artifact
         required: false
@@ -51,6 +59,9 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.image.outputs.image }}
+          build-args: |
+            CUDA_ARCHITECTURES=${{ inputs.cuda_architectures }}
+            LLAMA_CPP_REF=${{ inputs.llama_cpp_ref }}
 
       - name: Export image tarball
         if: inputs.export_artifact == 'true'
