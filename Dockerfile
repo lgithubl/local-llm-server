@@ -43,6 +43,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcurl4 \
+    libgomp1 \
   && rm -rf /var/lib/apt/lists/*
 
 ENV HOST=0.0.0.0 \
