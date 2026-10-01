@@ -18,7 +18,7 @@ on:
       export_artifact:
         description: Export image tar.gz artifact
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options:
           - "true"
@@ -63,6 +63,25 @@ jobs:
             CUDA_ARCHITECTURES=${{ inputs.cuda_architectures }}
             LLAMA_CPP_REF=${{ inputs.llama_cpp_ref }}
 
+      - name: Write image summary
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Docker image
+
+          Published image:
+
+          \`\`\`text
+          ${{ steps.image.outputs.image }}
+          \`\`\`
+
+          Pull it with:
+
+          \`\`\`bash
+          docker pull ${{ steps.image.outputs.image }}
+          \`\`\`
+          EOF
+
       - name: Export image tarball
         if: inputs.export_artifact == 'true'
         shell: bash
@@ -78,3 +97,26 @@ jobs:
           path: local-llm-server-${{ inputs.tag }}.tar.gz
           if-no-files-found: error
           retention-days: 30
+
+      - name: Write local image artifact summary
+        if: inputs.export_artifact == 'true'
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Local Docker image artifact
+
+          Download the artifact named \`local-llm-server-${{ inputs.tag }}\` from this workflow run.
+
+          The downloaded zip contains:
+
+          \`\`\`text
+          local-llm-server-${{ inputs.tag }}.tar.gz
+          \`\`\`
+
+          Load it locally with:
+
+          \`\`\`bash
+          gzip -dc local-llm-server-${{ inputs.tag }}.tar.gz | docker load
+          docker image inspect ${{ steps.image.outputs.image }}
+          \`\`\`
+          EOF
