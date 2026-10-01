@@ -86,8 +86,8 @@ jobs:
         shell: bash
         run: |
           docker pull "${{ steps.image.outputs.image }}"
-          docker run --rm --entrypoint /app/llama-server "${{ steps.image.outputs.image }}" --help >/tmp/llama-server-help.txt
-          head -40 /tmp/llama-server-help.txt
+          docker run --rm --entrypoint /bin/sh "${{ steps.image.outputs.image }}" -c \
+            "ldd /app/llama-server | tee /tmp/ldd.txt; ! grep 'not found' /tmp/ldd.txt | grep -v 'libcuda.so.1'"
 
       - name: Export image tarball
         if: inputs.export_artifact == 'true'
