@@ -1,0 +1,149 @@
+name: Build Model Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Name of the uploaded model artifact
+        required: true
+        default: qwen2.5-1.5b-instruct-q4_k_m-model
+      model_url:
+        description: GGUF model download URL
+        required: true
+        default: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+      model_filename:
+        description: GGUF filename inside the artifact
+        required: true
+        default: qwen2.5-1.5b-instruct-q4_k_m.gguf
+      model_type:
+        description: local-llm-server MODEL_TYPE value
+        required: true
+        default: text
+      ctx_size:
+        description: Recommended CTX_SIZE value
+        required: true
+        default: "4096"
+
+permissions:
+  contents: read
+
+jobs:
+  build-model-pack:
+    name: Build LLM model pack
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          sudo apt-get update --yes
+          sudo apt-get install --yes --no-install-recommends zstd
+
+      - name: Download model
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODEL_ROOT: /mnt/llm-models
+          MODEL_URL: ${{ inputs.model_url }}
+          MODEL_FILENAME: ${{ inputs.model_filename }}
+          MODEL_TYPE: ${{ inputs.model_type }}
+          CTX_SIZE: ${{ inputs.ctx_size }}
+        run: |
+          sudo mkdir -p "$MODEL_ROOT"
+          sudo chown "$USER:$USER" "$MODEL_ROOT"
+          python3 - <<'PY'
+          import os
+          import re
+          import shutil
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          root = Path(os.environ["MODEL_ROOT"])
+          url = os.environ["MODEL_URL"].strip()
+          filename = os.environ["MODEL_FILENAME"].strip()
+          token = os.environ.get("HF_TOKEN", "").strip()
+
+          if not url:
+              raise SystemExit("MODEL_URL is required")
+          if not filename or "/" in filename or filename in {".", ".."}:
+              raise SystemExit(f"Unsafe MODEL_FILENAME: {filename!r}")
+          if not re.search(r"\.gguf$", filename, re.IGNORECASE):
+              raise SystemExit("MODEL_FILENAME must end with .gguf")
+
+          target = root / filename
+          tmp = target.with_suffix(target.suffix + ".part")
+
+          request = urllib.request.Request(url)
+          request.add_header("User-Agent", "local-llm-server-model-pack")
+          if token:
+              request.add_header("Authorization", f"Bearer {token}")
+
+          for attempt in range(1, 6):
+              try:
+                  print(f"Downloading {url} -> {target}", flush=True)
+                  with urllib.request.urlopen(request, timeout=180) as response, tmp.open("wb") as out:
+                      shutil.copyfileobj(response, out, length=1024 * 1024)
+                  tmp.replace(target)
+                  size = target.stat().st_size
+                  if size <= 0:
+                      raise RuntimeError("Downloaded model is empty")
+                  print(f"Saved {target.name} ({size:,} bytes)", flush=True)
+                  break
+              except Exception as exc:
+                  if attempt == 5:
+                      raise
+                  wait = attempt * 10
+                  print(f"Download failed on attempt {attempt}: {exc}; retrying in {wait}s", flush=True)
+                  time.sleep(wait)
+
+          (root / "MODEL_MANIFEST.txt").write_text(
+              f"{filename}\t{target.stat().st_size}\t{url}\n",
+              encoding="utf-8",
+          )
+          (root / "RUN_COMMAND.txt").write_text(
+              "\n".join([
+                  "docker run -d \\",
+                  "  --name local-llm-instruct \\",
+                  "  --restart unless-stopped \\",
+                  "  --gpus all \\",
+                  "  -p 8081:8080 \\",
+                  "  -v /data/llm-models-instruct:/models:ro \\",
+                  f"  -e MODEL_TYPE={os.environ['MODEL_TYPE']} \\",
+                  f"  -e MODEL_PATH=/models/{filename} \\",
+                  f"  -e CTX_SIZE={os.environ['CTX_SIZE']} \\",
+                  "  -e N_GPU_LAYERS=999 \\",
+                  "  ghcr.io/lgithubl/local-llm-server:m40",
+                  "",
+                  "Use this from manga-studio:",
+                  "  LLM_API_BASE=http://host.docker.internal:8081",
+                  "",
+              ]),
+              encoding="utf-8",
+          )
+
+          print("\nModel manifest:", flush=True)
+          print((root / "MODEL_MANIFEST.txt").read_text(), flush=True)
+          print("Run command:", flush=True)
+          print((root / "RUN_COMMAND.txt").read_text(), flush=True)
+          PY
+
+      - name: Pack model
+        shell: bash
+        env:
+          MODEL_ROOT: /mnt/llm-models
+        run: |
+          archive="$RUNNER_TEMP/${{ inputs.artifact_name }}.tar.zst"
+          tar -C "$MODEL_ROOT" -I 'zstd -T0 -3' -cf "$archive" .
+          ls -lh "$archive"
+          tar -I zstd -tf "$archive" | sed -n '1,200p'
+          df -h / /mnt
+
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/${{ inputs.artifact_name }}.tar.zst
+          if-no-files-found: error
+          retention-days: 30

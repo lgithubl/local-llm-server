@@ -45,6 +45,45 @@ docker run --rm --gpus all \
 
 Sakura is text-only. Qwen-VL requires a matching language-model GGUF plus `mmproj` GGUF.
 
+## Prompt / instruct model for Manga Studio
+
+Use the `Build Model Pack` GitHub Action to download the recommended prompt
+model artifact:
+
+```text
+qwen2.5-1.5b-instruct-q4_k_m-model
+```
+
+After downloading the artifact, unpack it on the host:
+
+```bash
+mkdir -p /data/llm-models-instruct
+unzip qwen2.5-1.5b-instruct-q4_k_m-model.zip
+tar -C /data/llm-models-instruct -I zstd -xf qwen2.5-1.5b-instruct-q4_k_m-model.tar.zst
+```
+
+Run it on a different port from Sakura:
+
+```bash
+docker run -d \
+  --name local-llm-instruct \
+  --restart unless-stopped \
+  --gpus all \
+  -p 8081:8080 \
+  -v /data/llm-models-instruct:/models:ro \
+  -e MODEL_TYPE=text \
+  -e MODEL_PATH=/models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
+  -e CTX_SIZE=4096 \
+  -e N_GPU_LAYERS=999 \
+  ghcr.io/lgithubl/local-llm-server:m40
+```
+
+Then point Manga Studio at:
+
+```bash
+LLM_API_BASE=http://host.docker.internal:8081
+```
+
 ## k3s with Tesla M40
 
 On the node, `nvidia-smi` must show the M40 before Kubernetes can use it. Install the NVIDIA container runtime and device plugin so the node advertises `nvidia.com/gpu`.
