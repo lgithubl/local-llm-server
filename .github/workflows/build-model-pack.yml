@@ -6,23 +6,31 @@ on:
       artifact_name:
         description: Name of the uploaded model artifact
         required: true
-        default: qwen2.5-1.5b-instruct-q4_k_m-model
+        default: qwen2.5-vl-7b-abliterated-q4_k_m-model
       model_url:
         description: GGUF model download URL
         required: true
-        default: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+        default: https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf
       model_filename:
         description: GGUF filename inside the artifact
         required: true
-        default: qwen2.5-1.5b-instruct-q4_k_m.gguf
+        default: Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf
+      mmproj_url:
+        description: Optional Qwen-VL mmproj GGUF download URL
+        required: false
+        default: https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf
+      mmproj_filename:
+        description: Optional mmproj filename inside the artifact
+        required: false
+        default: Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf
       model_type:
         description: local-llm-server MODEL_TYPE value
         required: true
-        default: text
+        default: qwen-vl
       ctx_size:
         description: Recommended CTX_SIZE value
         required: true
-        default: "4096"
+        default: "8192"
 
 permissions:
   contents: read
@@ -47,6 +55,8 @@ jobs:
           MODEL_ROOT: /mnt/llm-models
           MODEL_URL: ${{ inputs.model_url }}
           MODEL_FILENAME: ${{ inputs.model_filename }}
+          MMPROJ_URL: ${{ inputs.mmproj_url }}
+          MMPROJ_FILENAME: ${{ inputs.mmproj_filename }}
           MODEL_TYPE: ${{ inputs.model_type }}
           CTX_SIZE: ${{ inputs.ctx_size }}
         run: |
@@ -61,67 +71,90 @@ jobs:
           from pathlib import Path
 
           root = Path(os.environ["MODEL_ROOT"])
-          url = os.environ["MODEL_URL"].strip()
-          filename = os.environ["MODEL_FILENAME"].strip()
+          model_type = os.environ["MODEL_TYPE"].strip()
+          model_url = os.environ["MODEL_URL"].strip()
+          model_filename = os.environ["MODEL_FILENAME"].strip()
+          mmproj_url = os.environ.get("MMPROJ_URL", "").strip()
+          mmproj_filename = os.environ.get("MMPROJ_FILENAME", "").strip()
           token = os.environ.get("HF_TOKEN", "").strip()
 
-          if not url:
+          if not model_url:
               raise SystemExit("MODEL_URL is required")
-          if not filename or "/" in filename or filename in {".", ".."}:
-              raise SystemExit(f"Unsafe MODEL_FILENAME: {filename!r}")
-          if not re.search(r"\.gguf$", filename, re.IGNORECASE):
-              raise SystemExit("MODEL_FILENAME must end with .gguf")
+          if model_type in {"qwen-vl", "vision"} and not mmproj_url:
+              raise SystemExit("MMPROJ_URL is required for qwen-vl/vision model packs")
+          if bool(mmproj_url) != bool(mmproj_filename):
+              raise SystemExit("MMPROJ_URL and MMPROJ_FILENAME must be supplied together")
 
-          target = root / filename
-          tmp = target.with_suffix(target.suffix + ".part")
+          def validate_filename(label, filename):
+              if not filename or "/" in filename or filename in {".", ".."}:
+                  raise SystemExit(f"Unsafe {label}: {filename!r}")
+              if not re.search(r"\.gguf$", filename, re.IGNORECASE):
+                  raise SystemExit(f"{label} must end with .gguf")
 
-          request = urllib.request.Request(url)
-          request.add_header("User-Agent", "local-llm-server-model-pack")
-          if token:
-              request.add_header("Authorization", f"Bearer {token}")
+          def download(url, filename):
+              validate_filename("filename", filename)
+              target = root / filename
+              tmp = target.with_suffix(target.suffix + ".part")
 
-          for attempt in range(1, 6):
-              try:
-                  print(f"Downloading {url} -> {target}", flush=True)
-                  with urllib.request.urlopen(request, timeout=180) as response, tmp.open("wb") as out:
-                      shutil.copyfileobj(response, out, length=1024 * 1024)
-                  tmp.replace(target)
-                  size = target.stat().st_size
-                  if size <= 0:
-                      raise RuntimeError("Downloaded model is empty")
-                  print(f"Saved {target.name} ({size:,} bytes)", flush=True)
-                  break
-              except Exception as exc:
-                  if attempt == 5:
-                      raise
-                  wait = attempt * 10
-                  print(f"Download failed on attempt {attempt}: {exc}; retrying in {wait}s", flush=True)
-                  time.sleep(wait)
+              request = urllib.request.Request(url)
+              request.add_header("User-Agent", "local-llm-server-model-pack")
+              if token:
+                  request.add_header("Authorization", f"Bearer {token}")
 
+              for attempt in range(1, 6):
+                  try:
+                      print(f"Downloading {url} -> {target}", flush=True)
+                      with urllib.request.urlopen(request, timeout=180) as response, tmp.open("wb") as out:
+                          shutil.copyfileobj(response, out, length=1024 * 1024)
+                      tmp.replace(target)
+                      size = target.stat().st_size
+                      if size <= 0:
+                          raise RuntimeError("Downloaded model is empty")
+                      print(f"Saved {target.name} ({size:,} bytes)", flush=True)
+                      return target
+                  except Exception as exc:
+                      if attempt == 5:
+                          raise
+                      wait = attempt * 10
+                      print(f"Download failed on attempt {attempt}: {exc}; retrying in {wait}s", flush=True)
+                      time.sleep(wait)
+
+          model_target = download(model_url, model_filename)
+          mmproj_target = download(mmproj_url, mmproj_filename) if mmproj_url else None
+
+          manifest_lines = [f"{model_target.name}\t{model_target.stat().st_size}\t{model_url}"]
+          if mmproj_target:
+              manifest_lines.append(f"{mmproj_target.name}\t{mmproj_target.stat().st_size}\t{mmproj_url}")
           (root / "MODEL_MANIFEST.txt").write_text(
-              f"{filename}\t{target.stat().st_size}\t{url}\n",
+              "\n".join(manifest_lines) + "\n",
               encoding="utf-8",
           )
-          (root / "RUN_COMMAND.txt").write_text(
-              "\n".join([
-                  "docker run -d \\",
-                  "  --name local-llm-instruct \\",
-                  "  --restart unless-stopped \\",
-                  "  --gpus all \\",
-                  "  -p 8081:8080 \\",
-                  "  -v /data/llm-models-instruct:/models:ro \\",
-                  f"  -e MODEL_TYPE={os.environ['MODEL_TYPE']} \\",
-                  f"  -e MODEL_PATH=/models/{filename} \\",
-                  f"  -e CTX_SIZE={os.environ['CTX_SIZE']} \\",
-                  "  -e N_GPU_LAYERS=999 \\",
-                  "  ghcr.io/lgithubl/local-llm-server:m40",
-                  "",
-                  "Use this from manga-studio:",
-                  "  LLM_API_BASE=http://host.docker.internal:8081",
-                  "",
-              ]),
-              encoding="utf-8",
-          )
+
+          volume_hint = "/data/llm-models-qwen-vl" if mmproj_target else "/data/llm-models-instruct"
+          container_name = "local-llm-qwen-vl" if mmproj_target else "local-llm-instruct"
+          port_hint = "8082" if mmproj_target else "8081"
+          run_lines = [
+              "docker run -d \\",
+              f"  --name {container_name} \\",
+              "  --restart unless-stopped \\",
+              "  --gpus all \\",
+              f"  -p {port_hint}:8080 \\",
+              f"  -v {volume_hint}:/models:ro \\",
+              f"  -e MODEL_TYPE={model_type} \\",
+              f"  -e MODEL_PATH=/models/{model_target.name} \\",
+          ]
+          if mmproj_target:
+              run_lines.append(f"  -e MMPROJ_PATH=/models/{mmproj_target.name} \\")
+          run_lines.extend([
+              f"  -e CTX_SIZE={os.environ['CTX_SIZE']} \\",
+              "  -e N_GPU_LAYERS=999 \\",
+              "  ghcr.io/lgithubl/local-llm-server:m40",
+              "",
+              "Use this from manga-studio:",
+              f"  LLM_API_BASE=http://host.docker.internal:{port_hint}",
+              "",
+          ])
+          (root / "RUN_COMMAND.txt").write_text("\n".join(run_lines), encoding="utf-8")
 
           print("\nModel manifest:", flush=True)
           print((root / "MODEL_MANIFEST.txt").read_text(), flush=True)

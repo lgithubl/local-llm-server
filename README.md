@@ -45,10 +45,57 @@ docker run --rm --gpus all \
 
 Sakura is text-only. Qwen-VL requires a matching language-model GGUF plus `mmproj` GGUF.
 
+## Qwen2.5-VL 7B abliterated model pack
+
+Use the `Build Model Pack` GitHub Action with its defaults to build the recommended
+vision model artifact:
+
+```text
+qwen2.5-vl-7b-abliterated-q4_k_m-model
+```
+
+The artifact contains both required files:
+
+```text
+Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf
+Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf
+```
+
+After downloading the artifact, unpack it on the host:
+
+```bash
+mkdir -p /data/llm-models-qwen-vl
+unzip qwen2.5-vl-7b-abliterated-q4_k_m-model.zip
+tar -C /data/llm-models-qwen-vl -I zstd -xf qwen2.5-vl-7b-abliterated-q4_k_m-model.tar.zst
+```
+
+Run it on a different port from Sakura and text-only prompt models:
+
+```bash
+docker run -d \
+  --name local-llm-qwen-vl \
+  --restart unless-stopped \
+  --gpus all \
+  -p 8082:8080 \
+  -v /data/llm-models-qwen-vl:/models:ro \
+  -e MODEL_TYPE=qwen-vl \
+  -e MODEL_PATH=/models/Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf \
+  -e MMPROJ_PATH=/models/Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf \
+  -e CTX_SIZE=8192 \
+  -e N_GPU_LAYERS=999 \
+  ghcr.io/lgithubl/local-llm-server:m40
+```
+
+Then point Manga Studio vision features at:
+
+```bash
+LLM_API_BASE=http://host.docker.internal:8082
+```
+
 ## Prompt / instruct model for Manga Studio
 
-Use the `Build Model Pack` GitHub Action to download the recommended prompt
-model artifact:
+The model pack action defaults to the Qwen-VL pack above. Override the workflow
+inputs to build the smaller text-only prompt model artifact:
 
 ```text
 qwen2.5-1.5b-instruct-q4_k_m-model
