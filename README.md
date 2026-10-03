@@ -92,6 +92,14 @@ Then point Manga Studio vision features at:
 LLM_API_BASE=http://host.docker.internal:8082
 ```
 
+To verify whether the model is good enough for Manga Studio manga-import
+enhancement, run the `Build VLM Test Pack` GitHub Action, download the
+`qwen-vl-test-pack` artifact, and execute:
+
+```bash
+./run.sh http://127.0.0.1:8082
+```
+
 ## Prompt / instruct model for Manga Studio
 
 The model pack action defaults to the Qwen-VL pack above. Override the workflow

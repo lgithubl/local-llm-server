@@ -1,0 +1,54 @@
+name: Build VLM Test Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Name of the uploaded test-pack artifact
+        required: true
+        default: qwen-vl-test-pack
+
+permissions:
+  contents: read
+
+jobs:
+  build-vlm-test-pack:
+    name: Build VLM test pack
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install fixture dependency
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'Pillow>=10,<12'
+
+      - name: Build test pack
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pack="$RUNNER_TEMP/${{ inputs.artifact_name }}"
+          mkdir -p "$pack"
+          cp -R tools/vlm-test-pack/. "$pack/"
+          python "$pack/generate_fixtures.py" --out "$pack/images"
+          python -m py_compile "$pack/generate_fixtures.py" "$pack/run_vlm_smoke.py"
+          chmod +x "$pack/run.sh" "$pack/generate_fixtures.py" "$pack/run_vlm_smoke.py"
+          find "$pack" -maxdepth 3 -type f | sort
+
+      - name: Upload test pack artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/${{ inputs.artifact_name }}
+          if-no-files-found: error
+          retention-days: 30
+
